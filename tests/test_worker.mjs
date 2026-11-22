@@ -22,13 +22,44 @@ test("rejects missing or wrong X-Proxy-Secret with 403", async () => {
   assert.equal(res.status, 403);
 });
 
-test("rejects non-allowlisted host and http downgrade with 403", async () => {
-  for (const bad of ["https://evil.example.com/", "http://maganghub.kemnaker.go.id/"]) {
+test("rejects non-kemnaker hosts, lookalike domains, and http downgrade with 403", async () => {
+  for (const bad of [
+    "https://evil.example.com/",
+    "https://evil-kemnaker.go.id/",
+    "https://kemnaker.go.id.evil.com/",
+    "http://maganghub.kemnaker.go.id/",
+  ]) {
     const req = new Request(`https://w.workers.dev/?url=${encodeURIComponent(bad)}`, {
       headers: { "X-Proxy-Secret": ENV.PROXY_SECRET },
     });
     const res = await worker.fetch(req, ENV, {});
     assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.match(body.error, /Forbidden target host or protocol \(/);
+  }
+});
+
+test("allows legitimate kemnaker.go.id subdomains (e.g. siapkerja.kemnaker.go.id) and preserves multiple Set-Cookie headers", async () => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const h = new Headers();
+    h.append("Set-Cookie", "acw_tc=abc; Domain=.kemnaker.go.id; Path=/");
+    h.append("Set-Cookie", "kemnaker_ri_session=sess123; Domain=.kemnaker.go.id; Path=/; HttpOnly");
+    return new Response("ok", { status: 200, headers: h });
+  };
+  try {
+    const req = new Request(
+      `https://w.workers.dev/?url=${encodeURIComponent("https://siapkerja.kemnaker.go.id/auth/callback")}`,
+      { headers: { "X-Proxy-Secret": ENV.PROXY_SECRET } }
+    );
+    const res = await worker.fetch(req, ENV, {});
+    assert.equal(res.status, 200);
+    const cookies = res.headers.getSetCookie();
+    assert.equal(cookies.length, 2);
+    assert.equal(cookies[0], "acw_tc=abc; Path=/");
+    assert.equal(cookies[1], "kemnaker_ri_session=sess123; Path=/; HttpOnly");
+  } finally {
+    globalThis.fetch = origFetch;
   }
 });
 
