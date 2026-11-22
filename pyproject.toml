@@ -1,3 +1,7 @@
 [project]
 name = "monev"
 version = "2.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42.0.0,<47.0.0",
+]

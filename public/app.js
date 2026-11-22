@@ -53,6 +53,26 @@
     recentHistoryList: document.getElementById("recent-history-list")
   };
 
+  function extractErrorMessage(data, fallback) {
+    if (data && typeof data === "object") {
+      if (typeof data.error === "string" && data.error.trim()) {
+        return data.error.trim();
+      }
+      if (data.error && typeof data.error === "object") {
+        if (typeof data.error.message === "string" && data.error.message.trim()) {
+          return data.error.message.trim();
+        }
+        if (typeof data.error.code === "string" && data.error.code.trim()) {
+          return data.error.code.trim();
+        }
+      }
+      if (typeof data.message === "string" && data.message.trim()) {
+        return data.message.trim();
+      }
+    }
+    return fallback;
+  }
+
   function showLoginError(msg) {
     if (!els.loginError) return;
     if (!msg) {
@@ -282,7 +302,7 @@
         return;
       }
 
-      var errText = data.error || "Gagal memuat status presensi.";
+      var errText = extractErrorMessage(data, "Gagal memuat status presensi.");
       if (els.dashboard && els.dashboard.classList.contains("hidden")) {
         showLoginScreen(errText);
       } else {
@@ -344,7 +364,7 @@
         return;
       }
 
-      showLoginError(data.error || "Gagal masuk. Periksa kembali akun Anda.");
+      showLoginError(extractErrorMessage(data, "Gagal masuk. Periksa kembali akun Anda."));
     } catch (_err) {
       showLoginError("Gagal menghubungi server autentikasi.");
     } finally {
@@ -398,7 +418,7 @@
       if (res.status === 200 && data.coords) {
         renderCoordinates(data.coords);
       } else {
-        showDashboardAlert(data.error || "Gagal mengacak ulang koordinat.", "error");
+        showDashboardAlert(extractErrorMessage(data, "Gagal mengacak ulang koordinat."), "error");
       }
     } catch (_err) {
       showDashboardAlert("Gagal mengacak ulang koordinat.", "error");
@@ -449,7 +469,7 @@
           updateCharCounts();
         }
       } else {
-        showDashboardAlert(data.error || "Gagal memuat template laporan.", "error");
+        showDashboardAlert(extractErrorMessage(data, "Gagal memuat template laporan."), "error");
       }
     } catch (_err) {
       showDashboardAlert("Gagal memuat template laporan.", "error");
@@ -507,7 +527,7 @@
       }
 
       if (res.status === 409) {
-        showDashboardAlert(data.error || "Presensi hari ini sudah tercatat.", "error");
+        showDashboardAlert(extractErrorMessage(data, "Presensi hari ini sudah tercatat."), "error");
         await loadStatus(true);
         return;
       }
@@ -518,7 +538,7 @@
         return;
       }
 
-      showDashboardAlert(data.error || "Gagal mengirim presensi.", "error");
+      showDashboardAlert(extractErrorMessage(data, "Gagal mengirim presensi."), "error");
     } catch (_err) {
       showDashboardAlert("Gagal menghubungi server saat mengirim presensi.", "error");
     } finally {

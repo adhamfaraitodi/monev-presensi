@@ -1,5 +1,6 @@
 import os
 import re
+import subprocess
 import threading
 import unittest
 from unittest import mock
@@ -34,6 +35,48 @@ class TestUiCspAndStructure(unittest.TestCase):
         self.assertIn("/api/status", js)
         self.assertIn("/api/template", js)
         self.assertIn("/api/submit", js)
+
+    def test_pyproject_declares_runtime_dependencies_matching_requirements(self):
+        with open(os.path.join(ROOT, "requirements.txt"), "r", encoding="utf-8") as f:
+            reqs = [
+                line.strip()
+                for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        with open(os.path.join(ROOT, "pyproject.toml"), "r", encoding="utf-8") as f:
+            pyproject = f.read()
+        self.assertRegex(pyproject, r"(?m)^dependencies\s*=\s*\[")
+        for req in reqs:
+            self.assertIn(f'"{req}"', pyproject)
+
+    def test_app_js_extracts_nested_error_objects_without_object_object(self):
+        path = os.path.join(ROOT, "public", "app.js")
+        with open(path, "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("function extractErrorMessage(", js)
+        # Execute extractErrorMessage in Node to verify real behavior on Vercel-shaped errors
+        match = re.search(
+            r"function extractErrorMessage\([\s\S]*?\n  \}",
+            js,
+        )
+        self.assertIsNotNone(match)
+        probe = (
+            match.group(0)
+            + "\n"
+            + "const assert = require('assert');\n"
+            + "assert.strictEqual(extractErrorMessage({error: 'Bad creds'}, 'Fallback'), 'Bad creds');\n"
+            + "assert.strictEqual(extractErrorMessage({error: {code: '500', message: 'A server error has occurred'}}, 'Fallback'), 'A server error has occurred');\n"
+            + "assert.strictEqual(extractErrorMessage({error: {code: 'FUNCTION_INVOCATION_FAILED'}}, 'Fallback'), 'FUNCTION_INVOCATION_FAILED');\n"
+            + "assert.strictEqual(extractErrorMessage({error: {}}, 'Fallback'), 'Fallback');\n"
+            + "assert.strictEqual(extractErrorMessage({}, 'Fallback'), 'Fallback');\n"
+        )
+        proc = subprocess.run(
+            ["node", "-e", probe],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
     def test_dev_server_imports_cleanly(self):
         import dev_server
