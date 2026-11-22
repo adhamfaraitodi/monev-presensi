@@ -1,71 +1,107 @@
 /**
- * CLOUDFLARE WORKER REVERSE PROXY FOR KEMNAKER MONEV
- * Script ini bertindak sebagai jembatan (reverse proxy) dari server cloud (Vercel)
- * ke server Kemnaker (maganghub.kemnaker.go.id, account.kemnaker.go.id, monev-api).
- * 
- * Cara Penggunaan:
- * 1. Buka dash.cloudflare.com -> Workers & Pages -> Create Worker
- * 2. Beri nama (misal: monev-proxy) lalu klik Deploy.
- * 3. Klik Edit Code, paste isi file ini, lalu klik Deploy.
- * 4. Salin URL Worker Anda (misal: https://monev-proxy.user.workers.dev)
- * 5. Pasang URL tersebut ke Vercel Environment Variables:
- *    CLOUDFLARE_WORKER_URL=https://monev-proxy.user.workers.dev
+ * HARDENED CLOUDFLARE WORKER REVERSE PROXY & CRON FOR KEMNAKER MONEV
+ *
+ * Security & Controls:
+ * - Fail-closed (503) if PROXY_SECRET is not configured in Worker env.
+ * - Constant-time verification of X-Proxy-Secret header (403 on mismatch).
+ * - Strict allowlist of Kemnaker HTTPS origins for both target URL and Location redirects.
+ * - Strips X-Proxy-Secret, Host, and cf-* headers upstream.
+ * - No wildcard CORS headers.
+ * - Scheduled 17:00 WIB (10:00 UTC) Mon-Fri cron sends POST /api/cron with
+ *   Authorization: Bearer <CRON_SECRET> (never in query string).
  */
 
+const ALLOWED_HOSTS = new Set([
+  "maganghub.kemnaker.go.id",
+  "account.kemnaker.go.id",
+  "monev-api.maganghub.kemnaker.go.id",
+]);
+
+function timingSafeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") {
+    return false;
+  }
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  const len = Math.max(aBytes.length, bBytes.length);
+  let diff = aBytes.length ^ bBytes.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (aBytes[i] || 0) ^ (bBytes[i] || 0);
+  }
+  return diff === 0 && aBytes.length > 0;
+}
+
+function isAllowedKemnakerUrl(urlObj) {
+  return (
+    urlObj instanceof URL &&
+    urlObj.protocol === "https:" &&
+    ALLOWED_HOSTS.has(urlObj.hostname)
+  );
+}
+
+function jsonResponse(status, payload) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
 export default {
-  async fetch(request, env, ctx) {
-    // Handle CORS preflight
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "*",
-        },
-      });
+  async fetch(request, env, _ctx) {
+    const expectedSecret =
+      env && typeof env.PROXY_SECRET === "string" ? env.PROXY_SECRET.trim() : "";
+    if (!expectedSecret) {
+      return jsonResponse(503, { error: "PROXY_SECRET is not configured on Worker." });
+    }
+
+    const providedSecret = request.headers.get("X-Proxy-Secret") || "";
+    if (!timingSafeEqual(providedSecret, expectedSecret)) {
+      return jsonResponse(403, { error: "Forbidden: invalid proxy secret." });
     }
 
     const currentUrl = new URL(request.url);
     const targetUrlStr = currentUrl.searchParams.get("url");
-
     if (!targetUrlStr) {
-      return new Response(JSON.stringify({
-        status: "online",
-        message: "Monev Cloudflare Reverse Proxy aktif!",
-        usage: "/?url=https://maganghub.kemnaker.go.id/..."
-      }, null, 2), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
+      return jsonResponse(400, { error: "Missing target url parameter." });
     }
 
     let targetUrl;
     try {
       targetUrl = new URL(targetUrlStr);
-    } catch (e) {
-      return new Response(JSON.stringify({ error: "Invalid target URL: " + targetUrlStr }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
+    } catch (_e) {
+      return jsonResponse(400, { error: "Invalid target URL." });
     }
 
-    // Salin dan sesuaikan headers
+    if (!isAllowedKemnakerUrl(targetUrl)) {
+      return jsonResponse(403, { error: "Forbidden target host or protocol." });
+    }
+
     const newHeaders = new Headers();
     for (const [key, value] of request.headers.entries()) {
-      // Abaikan header host asli agar target menerima Host sesuai domainnya
-      if (!["host", "cf-connecting-ip", "cf-ray", "cf-visitor"].includes(key.toLowerCase())) {
-        newHeaders.set(key, value);
+      const lower = key.toLowerCase();
+      if (
+        lower === "host" ||
+        lower === "x-proxy-secret" ||
+        lower.startsWith("cf-")
+      ) {
+        continue;
       }
+      newHeaders.set(key, value);
     }
     newHeaders.set("Host", targetUrl.host);
 
-    // Filter cookie acw_tc jika target bukan maganghub agar tidak memicu timeout WAF
-    if (newHeaders.has("cookie") && targetUrl.host !== "maganghub.kemnaker.go.id") {
-      const cookieHeader = newHeaders.get("cookie");
+    // Strip acw_tc cookie for non-maganghub hosts to avoid WAF timeouts
+    if (newHeaders.has("cookie") && targetUrl.hostname !== "maganghub.kemnaker.go.id") {
+      const cookieHeader = newHeaders.get("cookie") || "";
       const cleaned = cookieHeader
         .split(";")
-        .map(c => c.trim())
-        .filter(c => !c.toLowerCase().startsWith("acw_tc="))
+        .map((c) => c.trim())
+        .filter((c) => c && !c.toLowerCase().startsWith("acw_tc="))
         .join("; ");
       if (cleaned) {
         newHeaders.set("cookie", cleaned);
@@ -74,143 +110,113 @@ export default {
       }
     }
 
-    // Forward request ke target Kemnaker
     try {
       const response = await fetch(targetUrl.toString(), {
         method: request.method,
         headers: newHeaders,
-        body: ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer(),
-        redirect: "manual" // Penting: Jangan auto-follow redirect agar cookie dan set-cookie tidak hilang
+        body: ["GET", "HEAD"].includes(request.method.toUpperCase())
+          ? undefined
+          : await request.arrayBuffer(),
+        redirect: "manual",
       });
 
       const responseHeaders = new Headers();
-      
-      // Salin response headers
       for (const [key, value] of response.headers.entries()) {
-        if (key.toLowerCase() === "set-cookie") {
-          // Bersihkan atribut Domain agar cookie diterima oleh client
+        const lower = key.toLowerCase();
+        if (lower === "set-cookie") {
           const cleanedCookie = value.replace(/;\s*domain=[^;]+/gi, "");
           responseHeaders.append("Set-Cookie", cleanedCookie);
-        } else if (key.toLowerCase() === "location") {
-          // Jika ada redirect, arahkan balik lewat worker
-          let redirectTarget = value;
-          if (redirectTarget.startsWith("/")) {
-            redirectTarget = `${targetUrl.protocol}//${targetUrl.host}${redirectTarget}`;
+        } else if (lower === "location") {
+          let resolvedRedirect;
+          try {
+            resolvedRedirect = new URL(value, targetUrl);
+          } catch (_e) {
+            return jsonResponse(403, { error: "Invalid redirect Location from upstream." });
           }
-          const wrappedRedirect = `${currentUrl.origin}/?url=${encodeURIComponent(redirectTarget)}`;
+          if (!isAllowedKemnakerUrl(resolvedRedirect)) {
+            return jsonResponse(403, { error: "Forbidden redirect host or protocol." });
+          }
+          const wrappedRedirect = `${currentUrl.origin}/?url=${encodeURIComponent(
+            resolvedRedirect.toString()
+          )}`;
           responseHeaders.set("Location", wrappedRedirect);
-        } else {
+        } else if (!lower.startsWith("access-control-")) {
           responseHeaders.set(key, value);
         }
       }
 
-      responseHeaders.set("Access-Control-Allow-Origin", "*");
-
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
-        headers: responseHeaders
+        headers: responseHeaders,
       });
-
     } catch (err) {
-      return new Response(JSON.stringify({
-        error: "Gagal menghubungkan ke target Kemnaker",
-        detail: err.message
-      }), {
-        status: 502,
-        headers: { "Content-Type": "application/json" }
+      return jsonResponse(502, {
+        error: "Failed to connect to Kemnaker upstream.",
+        detail: err && err.message ? err.message : String(err),
       });
     }
   },
 
   /**
-   * CRON TRIGGER SCHEDULER (100% TEPAT WAKTU PER DETIK DI CLOUDFLARE EDGE)
-   * Jadwal Hari Kerja (Senin–Jumat / 1-5):
-   * - 0 2 * * 1-5  = 02:00 UTC (09:00 WIB) -> Monitoring Pagi & Cek Sistem
-   * - 0 8 * * 1-5  = 08:00 UTC (15:00 WIB) -> Auto Monev (Jam 3 Sore)
-   * - 0 11 * * 1-5 = 11:00 UTC (18:00 WIB) -> Cek Status Jam 6 Sore & Auto-Retry
-   * - 0 14 * * 1-5 = 14:00 UTC (21:00 WIB) -> Cek Status Jam 9 Malam + Cuplikan Monev & Auto-Retry
-   * Akhir pekan (Sabtu & Minggu): Tidak ada aktivitas / disabled total.
+   * CRON TRIGGER SCHEDULER: 17:00 WIB (10:00 UTC), Monday-Friday (`0 10 * * 1-5`)
    */
   async scheduled(event, env, ctx) {
-    const cron = event.cron || "";
-    const now = new Date();
-    // Konversi ke Waktu Indonesia Barat (WIB, UTC+7)
-    const wibDate = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-    const dayOfWeek = wibDate.getUTCDay(); // 0 = Minggu, 6 = Sabtu
-
-    // Proteksi weekend mutlak: Hentikan seluruh cron di hari Sabtu dan Minggu
+    const baseTime =
+      event && typeof event.scheduledTime === "number"
+        ? event.scheduledTime
+        : Date.now();
+    const wibDate = new Date(baseTime + 7 * 60 * 60 * 1000);
+    const dayOfWeek = wibDate.getUTCDay(); // 0 = Sunday, 6 = Saturday
     if (dayOfWeek === 0 || dayOfWeek === 6) {
-      console.log(`[CF Cron] Akhir pekan (Sabtu/Minggu - Day ${dayOfWeek}). Seluruh aktivitas cron dinonaktifkan.`);
       return;
     }
 
-    const hourUtc = now.getUTCHours();
-    const vercelHost = (env && env.VERCEL_DOMAIN) ? env.VERCEL_DOMAIN.replace(/\/+$/, "") : "https://monev-wine.vercel.app";
-    const cronSecret = (env && env.CRON_SECRET) ? env.CRON_SECRET.trim() : "";
-
-    let path = "";
-    if (cron.startsWith("0 2 * *") || hourUtc === 2) {
-      path = "/api/cron?type=status&waktu=pagi";
-    } else if (cron.startsWith("0 8 * *") || hourUtc === 8) {
-      path = "/api/cron?type=auto";
-    } else if (cron.startsWith("0 11 * *") || hourUtc === 11) {
-      path = "/api/cron?type=status&waktu=sore";
-    } else if (cron.startsWith("0 14 * *") || hourUtc === 14) {
-      path = "/api/cron?type=status&waktu=malam";
-    } else {
-      console.log(`[CF Cron Idle] Scheduled trigger pada jam ${hourUtc} UTC di luar jadwal. Tidak ada request yang dikirim.`);
+    const vercelDomain =
+      env && typeof env.VERCEL_DOMAIN === "string"
+        ? env.VERCEL_DOMAIN.trim().replace(/\/+$/, "")
+        : "";
+    const cronSecret =
+      env && typeof env.CRON_SECRET === "string" ? env.CRON_SECRET.trim() : "";
+    if (!vercelDomain || !cronSecret) {
       return;
     }
 
-    if (cronSecret && path.includes("type=auto")) {
-      path += `&secret=${encodeURIComponent(cronSecret)}`;
-    }
-
-    const targetEndpoint = `${vercelHost}${path}`;
+    const targetEndpoint = `${vercelDomain}/api/cron`;
     const reqHeaders = {
-      "User-Agent": "Cloudflare-Worker-Cron/1.0"
+      "User-Agent": "Cloudflare-Worker-Cron/2.0",
+      Authorization: `Bearer ${cronSecret}`,
+      Accept: "application/json",
     };
-    if (cronSecret) {
-      reqHeaders["Authorization"] = `Bearer ${cronSecret}`;
-    }
 
-    // Fungsi pemanggil dengan Timeout 55s dan Auto-Retry 2x jika terjadi kendala jaringan/cold start
     const executeScheduledTask = async () => {
-      const maxRetries = 2;
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const maxAttempts = 2; // 1 initial + 1 retry on network/5xx
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort("Request Timeout 55s"), 55000);
         try {
-          console.log(`[CF Cron Trigger] (Percobaan ${attempt}/${maxRetries}) Menghubungi: ${targetEndpoint}`);
           const res = await fetch(targetEndpoint, {
-            method: "GET",
+            method: "POST",
             headers: reqHeaders,
-            signal: controller.signal
+            signal: controller.signal,
           });
           clearTimeout(timer);
-
-          const body = await res.text();
-          if (res.ok) {
-            console.log(`[CF Cron Success] HTTP ${res.status}: ${body.slice(0, 200)}`);
+          await res.text();
+          if (res.status < 500) {
             return;
-          } else {
-            console.warn(`[CF Cron Warning] HTTP ${res.status} pada percobaan ${attempt}: ${body.slice(0, 200)}`);
-            if (attempt < maxRetries) {
-              await new Promise(r => setTimeout(r, 3000)); // jeda 3 detik sebelum coba lagi
-            }
           }
-        } catch (err) {
+        } catch (_err) {
           clearTimeout(timer);
-          console.error(`[CF Cron Error] Gagal pada percobaan ${attempt}: ${err.name === "AbortError" ? "Timeout 55s" : err.message}`);
-          if (attempt < maxRetries) {
-            await new Promise(r => setTimeout(r, 3000));
-          }
         }
       }
     };
 
-    ctx.waitUntil(executeScheduledTask());
-  }
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(executeScheduledTask());
+    } else {
+      await executeScheduledTask();
+    }
+  },
 };
 
+export { ALLOWED_HOSTS, timingSafeEqual };
