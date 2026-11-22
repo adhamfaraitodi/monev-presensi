@@ -1,6 +1,3 @@
 [project]
 name = "monev"
-version = "1.0.0"
-
-[tool.vercel]
-entrypoint = "api.cron:handler"
+version = "2.0.0"
