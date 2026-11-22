@@ -4,8 +4,9 @@
  * Security & Controls:
  * - Fail-closed (503) if PROXY_SECRET is not configured in Worker env.
  * - Constant-time verification of X-Proxy-Secret header (403 on mismatch).
- * - Strict HTTPS-only allowlist restricted to kemnaker.go.id and *.kemnaker.go.id
- *   for both target URL and upstream Location redirects.
+ * - Strict allowlist restricted to kemnaker.go.id and *.kemnaker.go.id
+ *   for both target URL and upstream Location redirects, automatically upgrading
+ *   any internal http://*.kemnaker.go.id redirect to https:// before fetching.
  * - Strips X-Proxy-Secret, Host, and cf-* headers upstream.
  * - Preserves multiple Set-Cookie headers cleanly via getSetCookie().
  * - No wildcard CORS headers.
@@ -36,15 +37,40 @@ function timingSafeEqual(a, b) {
   return diff === 0 && aBytes.length > 0;
 }
 
-function isAllowedKemnakerUrl(urlObj) {
-  if (!(urlObj instanceof URL) || urlObj.protocol !== "https:") {
+function isAllowedKemnakerHost(hostname) {
+  if (typeof hostname !== "string" || !hostname) {
     return false;
   }
-  const host = urlObj.hostname.toLowerCase();
+  const host = hostname.toLowerCase();
   return (
     host === ALLOWED_BASE_DOMAIN ||
     host.endsWith(`.${ALLOWED_BASE_DOMAIN}`) ||
     ALLOWED_HOSTS.has(host)
+  );
+}
+
+function normalizeKemnakerUrl(urlObj) {
+  if (!(urlObj instanceof URL)) {
+    return null;
+  }
+  if (urlObj.protocol !== "https:" && urlObj.protocol !== "http:") {
+    return null;
+  }
+  if (!isAllowedKemnakerHost(urlObj.hostname)) {
+    return null;
+  }
+  const normalized = new URL(urlObj.toString());
+  if (normalized.protocol === "http:") {
+    normalized.protocol = "https:";
+  }
+  return normalized;
+}
+
+function isAllowedKemnakerUrl(urlObj) {
+  return (
+    urlObj instanceof URL &&
+    urlObj.protocol === "https:" &&
+    isAllowedKemnakerHost(urlObj.hostname)
   );
 }
 
@@ -78,16 +104,17 @@ export default {
       return jsonResponse(400, { error: "Missing target url parameter." });
     }
 
-    let targetUrl;
+    let rawTargetUrl;
     try {
-      targetUrl = new URL(targetUrlStr);
+      rawTargetUrl = new URL(targetUrlStr);
     } catch (_e) {
       return jsonResponse(400, { error: "Invalid target URL." });
     }
 
-    if (!isAllowedKemnakerUrl(targetUrl)) {
+    const targetUrl = normalizeKemnakerUrl(rawTargetUrl);
+    if (!targetUrl) {
       return jsonResponse(403, {
-        error: `Forbidden target host or protocol (${targetUrl.protocol}//${targetUrl.hostname}).`,
+        error: `Forbidden target host or protocol (${rawTargetUrl.protocol}//${rawTargetUrl.hostname}).`,
       });
     }
 
@@ -151,15 +178,16 @@ export default {
             responseHeaders.append("Set-Cookie", cleanedCookie);
           }
         } else if (lower === "location") {
-          let resolvedRedirect;
+          let rawRedirect;
           try {
-            resolvedRedirect = new URL(value, targetUrl);
+            rawRedirect = new URL(value, targetUrl);
           } catch (_e) {
             return jsonResponse(403, { error: "Invalid redirect Location from upstream." });
           }
-          if (!isAllowedKemnakerUrl(resolvedRedirect)) {
+          const resolvedRedirect = normalizeKemnakerUrl(rawRedirect);
+          if (!resolvedRedirect) {
             return jsonResponse(403, {
-              error: `Forbidden redirect host or protocol (${resolvedRedirect.protocol}//${resolvedRedirect.hostname}).`,
+              error: `Forbidden redirect host or protocol (${rawRedirect.protocol}//${rawRedirect.hostname}).`,
             });
           }
           const wrappedRedirect = `${currentUrl.origin}/?url=${encodeURIComponent(
@@ -245,4 +273,4 @@ export default {
   },
 };
 
-export { ALLOWED_HOSTS, isAllowedKemnakerUrl, timingSafeEqual };
+export { ALLOWED_HOSTS, isAllowedKemnakerUrl, normalizeKemnakerUrl, timingSafeEqual };

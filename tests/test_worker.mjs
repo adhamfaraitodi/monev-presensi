@@ -22,12 +22,12 @@ test("rejects missing or wrong X-Proxy-Secret with 403", async () => {
   assert.equal(res.status, 403);
 });
 
-test("rejects non-kemnaker hosts, lookalike domains, and http downgrade with 403", async () => {
+test("rejects non-kemnaker hosts, lookalike domains, and non-http(s) protocols with 403", async () => {
   for (const bad of [
     "https://evil.example.com/",
     "https://evil-kemnaker.go.id/",
     "https://kemnaker.go.id.evil.com/",
-    "http://maganghub.kemnaker.go.id/",
+    "ftp://maganghub.kemnaker.go.id/",
   ]) {
     const req = new Request(`https://w.workers.dev/?url=${encodeURIComponent(bad)}`, {
       headers: { "X-Proxy-Secret": ENV.PROXY_SECRET },
@@ -36,6 +36,35 @@ test("rejects non-kemnaker hosts, lookalike domains, and http downgrade with 403
     assert.equal(res.status, 403);
     const body = await res.json();
     assert.match(body.error, /Forbidden target host or protocol \(/);
+  }
+});
+
+test("auto-upgrades http://*.kemnaker.go.id target URL and http:// Location redirects to https://", async () => {
+  const origFetch = globalThis.fetch;
+  const fetchedUrls = [];
+  globalThis.fetch = async (url, _opts) => {
+    fetchedUrls.push(url);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: "http://account.kemnaker.go.id/auth/login",
+      },
+    });
+  };
+  try {
+    const req = new Request(
+      `https://w.workers.dev/?url=${encodeURIComponent("http://account.kemnaker.go.id/auth")}`,
+      { headers: { "X-Proxy-Secret": ENV.PROXY_SECRET } }
+    );
+    const res = await worker.fetch(req, ENV, {});
+    assert.equal(res.status, 302);
+    assert.equal(fetchedUrls[0], "https://account.kemnaker.go.id/auth");
+    assert.equal(
+      res.headers.get("Location"),
+      `https://w.workers.dev/?url=${encodeURIComponent("https://account.kemnaker.go.id/auth/login")}`
+    );
+  } finally {
+    globalThis.fetch = origFetch;
   }
 });
 

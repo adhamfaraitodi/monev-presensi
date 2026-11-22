@@ -21,6 +21,20 @@ class TestKemnakerClient(unittest.TestCase):
             ))
         self.assertEqual([c.name for c in jar], ["naco_access_token"])
 
+    def test_wrap_proxy_url_upgrades_kemnaker_http_to_https_and_unwraps_referer(self):
+        proxied = kemnaker.wrap_proxy_url(
+            "http://account.kemnaker.go.id/auth/login",
+            "https://p.workers.dev",
+        )
+        self.assertEqual(
+            proxied,
+            "https://p.workers.dev/?url=https%3A%2F%2Faccount.kemnaker.go.id%2Fauth%2Flogin",
+        )
+        self.assertEqual(
+            kemnaker.unwrap_proxy_url(proxied, "https://p.workers.dev"),
+            "https://account.kemnaker.go.id/auth/login",
+        )
+
     def test_proxy_headers_attach_secret_and_fail_closed(self):
         hdrs = kemnaker.build_request_headers({"Accept": "application/json"}, "https://p.workers.dev", "sec123")
         self.assertEqual(hdrs["X-Proxy-Secret"], "sec123")
@@ -89,7 +103,11 @@ class TestKemnakerClient(unittest.TestCase):
         seen_requests = []
 
         class FakeResponse:
-            def __init__(self, body: bytes, url: str = "https://account.kemnaker.go.id/auth/login"):
+            def __init__(
+                self,
+                body: bytes,
+                url: str = "https://proxy.example.workers.dev/?url=https%3A%2F%2Faccount.kemnaker.go.id%2Fauth%2Flogin",
+            ):
                 self._body = body
                 self._url = url
 
@@ -112,7 +130,7 @@ class TestKemnakerClient(unittest.TestCase):
                         json.dumps({
                             "data": {
                                 "authenticated": True,
-                                "redirect_uri": "https://maganghub.kemnaker.go.id/callback?code=1",
+                                "redirect_uri": "http://maganghub.kemnaker.go.id/callback?code=1",
                             }
                         }).encode("utf-8")
                     )
@@ -139,6 +157,11 @@ class TestKemnakerClient(unittest.TestCase):
         for req in seen_requests:
             self.assertTrue(req.full_url.startswith("https://proxy.example.workers.dev/?url="))
             self.assertEqual(req.get_header("X-proxy-secret"), "proxy-secret-xyz")
+        self.assertEqual(
+            seen_requests[1].get_header("Referer"),
+            "https://account.kemnaker.go.id/auth/login",
+        )
+        self.assertIn("https%3A%2F%2Fmaganghub.kemnaker.go.id%2Fcallback", seen_requests[2].full_url)
         login_body = json.loads(seen_requests[1].data.decode("utf-8"))
         self.assertEqual(login_body, {"username": "passed_user", "password": "passed_super_secret_pw"})
         self.assertEqual(seen_requests[1].get_header("X-csrf-token"), "csrf-abc")

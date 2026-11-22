@@ -51,11 +51,43 @@ class SafeCookieJar(http.cookiejar.CookieJar):
         super().set_cookie(cookie)
 
 
+def _upgrade_kemnaker_https(target_url: str) -> str:
+    clean = (target_url or "").strip()
+    try:
+        parsed = urllib.parse.urlsplit(clean)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme == "http" and (
+            host == "kemnaker.go.id" or host.endswith(".kemnaker.go.id")
+        ):
+            return urllib.parse.urlunsplit(
+                ("https", parsed.netloc, parsed.path, parsed.query, parsed.fragment)
+            )
+    except Exception:
+        pass
+    return clean
+
+
 def wrap_proxy_url(target_url: str, proxy_url: str | None) -> str:
+    upgraded_target = _upgrade_kemnaker_https(target_url)
     clean_proxy = (proxy_url or "").strip().rstrip("/")
-    if clean_proxy and clean_proxy not in target_url:
-        return f"{clean_proxy}/?url={urllib.parse.quote(target_url, safe='')}"
-    return target_url
+    if clean_proxy and clean_proxy not in upgraded_target:
+        return f"{clean_proxy}/?url={urllib.parse.quote(upgraded_target, safe='')}"
+    return upgraded_target
+
+
+def unwrap_proxy_url(maybe_proxied_url: str, proxy_url: str | None) -> str:
+    raw = (maybe_proxied_url or "").strip()
+    clean_proxy = (proxy_url or "").strip().rstrip("/")
+    if clean_proxy and raw.startswith(clean_proxy):
+        try:
+            parsed = urllib.parse.urlsplit(raw)
+            qs = urllib.parse.parse_qs(parsed.query)
+            inner = qs.get("url", [None])[0]
+            if inner:
+                return _upgrade_kemnaker_https(inner)
+        except Exception:
+            pass
+    return _upgrade_kemnaker_https(raw)
 
 
 def build_request_headers(
@@ -100,7 +132,7 @@ def login_kemnaker(username: str, password: str) -> str:
         html_init = res_init.read().decode("utf-8", errors="ignore")
         csrf_match = re.search(r'name="csrf-token"\s+content="([^"]+)"', html_init)
         csrf = csrf_match.group(1) if csrf_match else ""
-        referer_url = res_init.geturl()
+        referer_url = unwrap_proxy_url(res_init.geturl(), proxy_url)
 
         payload_login = json.dumps(
             {"username": clean_user, "password": clean_pass}
