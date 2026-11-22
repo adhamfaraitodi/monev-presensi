@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monev Presensi — MagangHub Kemnaker</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app-container">
+    <!-- Login Screen -->
+    <section id="login-section" class="card login-card" aria-labelledby="login-title">
+      <div class="brand-header">
+        <span class="brand-tag">MagangHub Kemnaker</span>
+        <h1 id="login-title">Monev Presensi</h1>
+        <p class="subtitle">Masuk menggunakan akun SIAPkerja / Kemnaker Anda.</p>
+      </div>
+
+      <div id="login-error" class="alert alert-error hidden" role="alert"></div>
+
+      <form id="login-form" novalidate>
+        <div class="form-group">
+          <label for="username-input">Email / Username Kemnaker</label>
+          <input
+            type="text"
+            id="username-input"
+            name="username"
+            autocomplete="username"
+            placeholder="nama@email.com"
+            required
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="password-input">Kata Sandi</label>
+          <input
+            type="password"
+            id="password-input"
+            name="password"
+            autocomplete="current-password"
+            placeholder="Masukkan kata sandi"
+            required
+          >
+        </div>
+
+        <button type="submit" id="login-submit-btn" class="btn btn-primary btn-block">
+          Masuk
+        </button>
+      </form>
+    </section>
+
+    <!-- Dashboard Screen -->
+    <section id="dashboard" class="dashboard-view hidden" aria-label="Dasbor Presensi">
+      <!-- Top Bar -->
+      <header class="card top-bar">
+        <div class="user-meta">
+          <span class="meta-label">Peserta Magang</span>
+          <h2 id="user-name" class="user-name">-</h2>
+          <p class="mentor-line">Mentor: <span id="user-mentor">-</span></p>
+        </div>
+        <div class="top-actions">
+          <button type="button" id="refresh-btn" class="btn btn-secondary btn-sm">
+            Segarkan
+          </button>
+          <button type="button" id="logout-btn" class="btn btn-danger-outline btn-sm">
+            Keluar
+          </button>
+        </div>
+      </header>
+
+      <div id="dashboard-alert" class="alert hidden" role="status"></div>
+
+      <!-- Today's Status Card -->
+      <section class="card status-card" aria-labelledby="status-heading">
+        <div class="card-header-row">
+          <div>
+            <h3 id="status-heading" class="card-title">Status Hari Ini</h3>
+            <p class="date-subtitle">
+              <span id="today-date">-</span> &bull; <span id="today-time">--:--:--</span> WIB
+            </p>
+          </div>
+          <span id="today-badge" class="badge badge-pending">Memuat...</span>
+        </div>
+
+        <div id="today-details" class="today-details hidden">
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">Waktu Kirim</span>
+              <span id="today-submitted-at" class="detail-value">-</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Status Persetujuan</span>
+              <span id="today-approval" class="detail-value">-</span>
+            </div>
+          </div>
+          <div id="today-log-box" class="today-log-box hidden">
+            <span class="detail-label">Ringkasan Aktivitas Hari Ini</span>
+            <p id="today-activity-log" class="today-log-text"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Auto ±10m YIA Location Card -->
+      <section class="card location-card" aria-labelledby="location-heading">
+        <div class="card-header-row">
+          <div>
+            <h3 id="location-heading" class="card-title">Lokasi Otomatis (&plusmn;10m YIA)</h3>
+            <p class="card-caption">Titik koordinat acak dalam radius aman kantor.</p>
+          </div>
+          <button type="button" id="reroll-btn" class="btn btn-secondary btn-sm">
+            Acak Ulang
+          </button>
+        </div>
+        <div class="coords-box">
+          <div class="coords-item">
+            <span class="detail-label">Koordinat (Lat, Long)</span>
+            <code id="coords-display" class="coords-code">-7.9021141, 110.0651290</code>
+          </div>
+          <div class="coords-item">
+            <span class="detail-label">Jarak dari Titik Pusat</span>
+            <span id="coords-distance" class="coords-distance">0.00 m</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Manual Attendance & Daily Log Form -->
+      <section class="card form-card" aria-labelledby="form-heading">
+        <div class="card-header-row">
+          <div>
+            <h3 id="form-heading" class="card-title">Laporan Harian &amp; Presensi</h3>
+            <p id="template-counter" class="card-caption">Template tersedia: - / -</p>
+          </div>
+          <button type="button" id="random-template-btn" class="btn btn-secondary btn-sm">
+            Isi Template Acak
+          </button>
+        </div>
+
+        <form id="attendance-form" novalidate>
+          <div class="form-group">
+            <div class="label-row">
+              <label for="activity-input">Uraian Aktivitas</label>
+              <span id="activity-count" class="char-count">0 karakter</span>
+            </div>
+            <textarea
+              id="activity-input"
+              name="activity"
+              rows="3"
+              placeholder="Tuliskan kegiatan yang dilakukan hari ini..."
+              required
+            ></textarea>
+          </div>
+
+          <div class="form-group">
+            <div class="label-row">
+              <label for="learning-input">Pembelajaran yang Diperoleh</label>
+              <span id="learning-count" class="char-count">0 karakter</span>
+            </div>
+            <textarea
+              id="learning-input"
+              name="learning"
+              rows="3"
+              placeholder="Tuliskan ilmu atau keterampilan baru yang dipelajari..."
+              required
+            ></textarea>
+          </div>
+
+          <div class="form-group">
+            <div class="label-row">
+              <label for="obstacles-input">Kendala yang Dihadapi</label>
+              <span id="obstacles-count" class="char-count">0 karakter</span>
+            </div>
+            <textarea
+              id="obstacles-input"
+              name="obstacles"
+              rows="2"
+              placeholder="Tuliskan kendala atau 'Tidak ada kendala berarti'..."
+              required
+            ></textarea>
+          </div>
+
+          <button type="submit" id="submit-btn" class="btn btn-primary btn-block">
+            Kirim Presensi Hari Ini
+          </button>
+        </form>
+      </section>
+
+      <!-- 7-Day Recent History Card -->
+      <section class="card history-card" aria-labelledby="history-heading">
+        <h3 id="history-heading" class="card-title">Riwayat 7 Hari Terakhir</h3>
+        <ul id="recent-history-list" class="history-list"></ul>
+      </section>
+    </section>
+  </main>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
