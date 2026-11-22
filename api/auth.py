@@ -41,6 +41,7 @@ def handle_post(
     if not username or not password.strip():
         return (400, {"error": "Username and password are required."}, [])
 
+    token = ""
     try:
         allowed_username = config.get_allowed_username()
         if allowed_username is not None:
@@ -69,31 +70,31 @@ def handle_post(
     except config.ConfigError as exc:
         return (
             503,
-            {"error": http_utils.sanitize_error(exc, secrets=(password,))},
+            {"error": http_utils.sanitize_error(exc, secrets=(password, token))},
             [],
         )
     except kemnaker.KemnakerAuthError as exc:
         return (
             401,
-            {"error": http_utils.sanitize_error(exc, secrets=(password,))},
+            {"error": http_utils.sanitize_error(exc, secrets=(password, token))},
             [],
         )
     except kemnaker.AlreadySubmittedError as exc:
         return (
             409,
-            {"error": http_utils.sanitize_error(exc, secrets=(password,))},
+            {"error": http_utils.sanitize_error(exc, secrets=(password, token))},
             [],
         )
     except ValueError as exc:
         return (
             400,
-            {"error": http_utils.sanitize_error(exc, secrets=(password,))},
+            {"error": http_utils.sanitize_error(exc, secrets=(password, token))},
             [],
         )
     except Exception as exc:
         return (
             500,
-            {"error": http_utils.sanitize_error(exc, secrets=(password,))},
+            {"error": http_utils.sanitize_error(exc, secrets=(password, token))},
             [],
         )
 

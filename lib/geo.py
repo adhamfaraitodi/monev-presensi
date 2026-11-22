@@ -79,8 +79,8 @@ def validate_office_coordinates(
     center_lon: float | None = None,
     max_radius_m: float | None = None,
 ) -> dict:
-    f_lat = _coerce_finite_float(lat, "latitude")
-    f_lon = _coerce_finite_float(lon, "longitude")
+    f_lat = round(_coerce_finite_float(lat, "latitude"), 7)
+    f_lon = round(_coerce_finite_float(lon, "longitude"), 7)
     if not (-90.0 <= f_lat <= 90.0) or not (-180.0 <= f_lon <= 180.0):
         raise ValueError("Coordinates out of geographic bounds.")
 
@@ -91,7 +91,7 @@ def validate_office_coordinates(
             f"Coordinates are {dist:.2f}m from office center (max allowed {radius_m:.2f}m)."
         )
     return {
-        "latitude": round(f_lat, 7),
-        "longitude": round(f_lon, 7),
+        "latitude": f_lat,
+        "longitude": f_lon,
         "distance_m": round(dist, 2),
     }

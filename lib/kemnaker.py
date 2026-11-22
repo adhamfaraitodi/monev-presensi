@@ -130,7 +130,10 @@ def login_kemnaker(username: str, password: str) -> str:
             if isinstance(login_data, dict):
                 msg = str(login_data.get("message") or login_data.get("error") or "Invalid credentials")
             raise KemnakerAuthError(
-                http_utils.sanitize_error(f"Authentication failed: {msg}", secrets=(clean_pass,))
+                http_utils.sanitize_error(
+                    f"Authentication failed: {msg}",
+                    secrets=(clean_pass, proxy_secret or ""),
+                )
             )
 
         redirect_uri = login_data["data"].get("redirect_uri")
@@ -160,14 +163,14 @@ def login_kemnaker(username: str, password: str) -> str:
             body_text = ""
         detail = http_utils.sanitize_error(
             f"HTTP {exc.code}: {body_text or exc.reason}",
-            secrets=(clean_pass,),
+            secrets=(clean_pass, proxy_secret or ""),
         )
         if exc.code in (401, 403, 422):
             raise KemnakerAuthError(detail) from None
         raise KemnakerError(detail) from None
     except Exception as exc:
         raise KemnakerError(
-            http_utils.sanitize_error(exc, secrets=(clean_pass,))
+            http_utils.sanitize_error(exc, secrets=(clean_pass, proxy_secret or ""))
         ) from None
 
 
@@ -217,13 +220,16 @@ def api_call(
                         msg = f"{exc.code}: {extracted}"
         except Exception:
             pass
-        clean_msg = http_utils.sanitize_error(msg, secrets=(clean_token,))
+        clean_msg = http_utils.sanitize_error(
+            msg,
+            secrets=(clean_token, proxy_secret or ""),
+        )
         if exc.code == 401:
             raise KemnakerAuthError(clean_msg) from None
         raise KemnakerError(clean_msg) from None
     except Exception as exc:
         raise KemnakerError(
-            http_utils.sanitize_error(exc, secrets=(clean_token,))
+            http_utils.sanitize_error(exc, secrets=(clean_token, proxy_secret or ""))
         ) from None
 
 
